@@ -1,0 +1,84 @@
+#!/bin/sh
+
+if [ "$DEBUG" = "" ]; then
+  DEBUG=0
+fi
+if [ "$DEBUG" == 0 ]; then
+  exec 1>/dev/null
+fi
+if [ "$TIMEOUT" = "" ]; then
+  export TIMEOUT=0
+fi
+BACKUPS=/backups
+if [ "$PREFIX" = "" ]; then
+  export PREFIX="%Y-%m-%d_%H-%M-%S_"
+fi
+if [ "$SUFFIX" = "" ]; then
+  export SUFFIX=""
+fi
+if [ "$S3CMD_OPTS" = "" ]; then
+  export S3CMD_OPTS=""
+fi
+if [ "$BACKUPS" = "" ]; then
+  export BACKUPS="/backups/"
+else
+  export BACKUPS="${BACKUPS}/"
+fi
+if [ "$EMAIL_FROM" = "" ]; then
+  export EMAIL_FROM=""
+fi
+if [ "$EMAIL_TO" = "" ]; then
+  export EMAIL_TO=""
+fi
+if [ "$EXCLUDE" = "" ]; then
+  export EXCLUDE=""
+fi
+if [ "$SMTP_SERVER" = "" ]; then
+  export SMTP_SERVER=""
+fi
+
+export BUCKET=$1
+if [ -z "$BUCKET" ]; then
+  echo "$0 bucket container [container...]"
+  echo "(If set, docker-backup output will be POSTed to \$PUSHGATEWAY)"
+  exit 1
+fi
+shift
+
+if [ -z "$ACCESS_KEY" -o -z "$SECRET_KEY" ]; then
+  echo "Please set ACCESS_KEY and SECRET_KEY environment variables"
+  exit 1
+fi
+
+[ -d "$BACKUPS" ] || mkdir "$BACKUPS"
+
+push_metrics() {
+  [ -z "$PUSHGATEWAY" ] && return
+  curl --data-binary @- "$PUSHGATEWAY"
+}
+
+backup() {
+  echo "START: $1"
+  while true
+  do
+    # python script with error handling
+    /docker-backup/docker_backup.py $1
+    
+    date +"last_run{container=\"$1\"} %s" | push_metrics
+    # TIMEOUT = 0 -> execute just once and exit
+    if [ "$TIMEOUT" = 0 ]; then
+      echo "END: $1 - one time backup only"
+      break
+    else
+      echo "SLEEP: $1 - for $TIMEOUT seconds"
+    fi
+    sleep $TIMEOUT
+  done
+}
+
+for c in $@
+do
+  backup $c &
+done
+
+wait
